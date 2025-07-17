@@ -37,6 +37,8 @@ bool pref_clear = false;
 String new_filename = "";
 
 uint8_t *buffer = nullptr;
+int encodedPngSize;
+uint8_t *encodedPng = nullptr;
 uint8_t *decodedPng = nullptr;
 char filename[1024];      // image URL
 char binUrl[1024];        // update URL
@@ -101,6 +103,49 @@ void wait_for_serial()
   }
 #endif
 }
+/**
+ * @brief Function to decode a base64 encoded string
+ * @param pointer to base64 input, input length, pointer to output length
+ * @return pointer to binary data in a newly allocated block
+ */
+uint8_t * base64_decode(const char *pInput, int iLength, int *pOutLength)
+{
+  uint8_t c, *pOut, *d;
+  int i, iNewLen, iBit;
+
+  iNewLen = (iLength * 6)/8;
+  pOut = (uint8_t *)malloc(iNewLen);
+  if (!pOut) {
+    Log.info("%s [%d]: Unable to allocate %d bytes\n", __FILE__, __LINE__, iNewLen);
+    *pOutLength = 0;
+    return NULL; // no memory
+  }
+  Log.info("%s [%d]: base64 decoder allocated %d bytes\n", __FILE__, __LINE__, iNewLen);
+  i = iBit = 0;
+  d = pOut;
+  while (i < iLength) {
+    uint32_t u32;
+    c = pInput[i++];
+    if (c >= '+') { // valid character
+      u32 <<= 6;
+      if (c >= 'A' && c <= 'Z') u32 |= (c - 'A');
+      else if (c >= 'a' && c <= 'z') u32 |= (c - 'a' + 26);
+      else if (c >= '0' && c <= '9') u32 |= (c - '0' + 52);
+      else if (c == '+') u32 |= 62;
+      else if (c == '/') u32 |= 63;
+      iBit += 6;
+      if (iBit == 24) { // time to dump 3 bytes
+        *d++ = (uint8_t)(u32 >> 16);
+        *d++ = (uint8_t)(u32 >> 8);
+        *d++ = (uint8_t)u32;
+        u32 = 0;
+        iBit = 0;
+      }
+    }
+  }
+  *pOutLength = (int)(d - pOut);
+  return pOut;
+} /* base64_decode() */
 
 /**
  * @brief Function to init business logic module
@@ -239,10 +284,10 @@ void bl_init(void)
   {
     Log.info("%s [%d]: Display TRMNL logo start\r\n", __FILE__, __LINE__);
 
-    buffer = (uint8_t *)malloc(DEFAULT_IMAGE_SIZE);
+  //  buffer = (uint8_t *)malloc(DEFAULT_IMAGE_SIZE);
     display_show_image(storedLogoOrDefault(), false, false);
-    free(buffer);
-    buffer = nullptr;
+  //  free(buffer);
+  //  buffer = nullptr;
 
     need_to_refresh_display = 1;
     preferences.putBool(PREFERENCES_DEVICE_REGISTERED_KEY, false);
@@ -650,6 +695,14 @@ static https_request_err_e downloadAndShow()
               https.setTimeout(uint16_t(requestedTimeout));
             }
           }
+      bool isPNG;
+      int content_size;
+
+      if (encodedPng) { // we got the image from the first GET request
+        isPNG = (encodedPng[1] == 'P');
+        content_size = encodedPngSize;
+        buffer = encodedPng; // pass everything to the decoder logic below
+      } else { // need to make a second GET request
 
           const char *headers[] = {"Content-Type"};
           https.collectHeaders(headers, 1);
@@ -657,7 +710,7 @@ static https_request_err_e downloadAndShow()
           Log_info("RSSI: %d", WiFi.RSSI());
           // start connection and send HTTP header
           int httpCode = https.GET();
-          int content_size = https.getSize();
+          content_size = https.getSize();
 
           // httpCode will be negative on error
           if (httpCode < 0)
@@ -703,7 +756,7 @@ static https_request_err_e downloadAndShow()
 
           Log.info("%s [%d]: Stream available: %d\r\n", __FILE__, __LINE__, stream->available());
 
-          bool isPNG = https.header("Content-Type") == "image/png";
+          isPNG = https.header("Content-Type") == "image/png";
 
           Log.info("%s [%d]: Starting a download at: %d\r\n", __FILE__, __LINE__, getTime());
           heap_caps_check_integrity_all(true);
@@ -727,6 +780,8 @@ static https_request_err_e downloadAndShow()
 
             return HTTPS_WRONG_IMAGE_SIZE;
           }
+        } // needed to make a second GET request for the file data
+
           WiFi.disconnect(true); // no need for WiFi, save power starting here
           Log.info("%s [%d]: Received successfully; WiFi off\r\n", __FILE__, __LINE__);
           bool bmp_rename = false;
@@ -940,10 +995,19 @@ https_request_err_e handleApiDisplayResponse(ApiDisplayResponse &apiResponse)
       }
       if (image_url.length() > 0)
       {
-        Log.info("%s [%d]: image_url: %s\r\n", __FILE__, __LINE__, image_url.c_str());
-        Log.info("%s [%d]: image url end with: %d\r\n", __FILE__, __LINE__, image_url.endsWith("/setup-logo.bmp"));
+        const char *pURL = image_url.c_str();
+        if (memcmp(pURL, "http", 4) != 0) { // must be a base64 payload of the image instead of the url
+          Log.info("%s [%d]: image_url: (base64 image)\r\n", __FILE__, __LINE__);
+          encodedPng = base64_decode(pURL, image_url.length(), &encodedPngSize);
+          Log.info("%s [%d]: image payload = %d bytes\n", __FILE__, __LINE__, encodedPngSize);
+          strcpy(filename, "https://www.fakename.com/we_already_have_base64_image");
+          Serial.printf("First bytes: 0x%02x, 0x%02x, 0x%02x, 0x%02x\n", encodedPng[0], encodedPng[1], encodedPng[2], encodedPng[3]);
+        } else {
+          Log.info("%s [%d]: image_url: %s\r\n", __FILE__, __LINE__, image_url.c_str());
+          Log.info("%s [%d]: image url end with: %d\r\n", __FILE__, __LINE__, image_url.endsWith("/setup-logo.bmp"));
 
-        image_url.toCharArray(filename, image_url.length() + 1);
+          image_url.toCharArray(filename, image_url.length() + 1);
+        }
         // check if plugin is applied
         bool flag = preferences.getBool(PREFERENCES_DEVICE_REGISTERED_KEY, false);
         Log.info("%s [%d]: flag: %d\r\n", __FILE__, __LINE__, flag);

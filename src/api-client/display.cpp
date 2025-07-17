@@ -29,6 +29,11 @@ void addHeaders(HTTPClient &https, ApiDisplayInputs &inputs)
   https.addHeader("ID", inputs.macAddress);
   https.addHeader("Content-Type", "application/json");
   https.addHeader("Access-Token", inputs.apiKey);
+
+  // DEBUG - try getting the image here as base64
+  Log.info("Asking for the image as base64\n");
+  https.addHeader("base64", "true");
+
   https.addHeader("Refresh-Rate", String(inputs.refreshRate));
   https.addHeader("Battery-Voltage", String(inputs.batteryVoltage));
   https.addHeader("FW-Version", inputs.firmwareVersion);
