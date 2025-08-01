@@ -27,7 +27,7 @@ ApiDisplayResponse parseResponse_apiDisplay(String &payload)
       .filename = doc["filename"] | "",
       .update_firmware = doc["update_firmware"],
       .firmware_url = doc["firmware_url"] | "",
-      .refresh_rate = doc["refresh_rate"],
+      .refresh_rate = 30, //doc["refresh_rate"],
       .reset_firmware = doc["reset_firmware"],
       .special_function = parseSpecialFunction(special_function_str),
       .action = doc["action"] | "",
